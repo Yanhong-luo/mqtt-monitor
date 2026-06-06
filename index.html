@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MQTT 消息监控 - EMQX Cloud</title>
+    <!-- 使用 jsdelivr CDN，国内可用 -->
     <script src="https://cdn.jsdelivr.net/npm/mqtt@5.0.3/dist/mqtt.esm.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -212,7 +213,6 @@
     </div>
 
     <div class="container">
-        <!-- 连接配置 -->
         <div class="config-panel">
             <div class="config-grid">
                 <div class="input-group">
@@ -234,7 +234,7 @@
                 </div>
                 <div class="input-group">
                     <label>订阅 Topic</label>
-                    <input type="text" id="subscribeTopic" value="#" placeholder="# = 订阅所有">
+                    <input type="text" id="subscribeTopic" value="#" placeholder="# 订阅所有">
                     <small># 通配符可接收所有主题消息</small>
                 </div>
             </div>
@@ -261,7 +261,6 @@
             </div>
         </div>
 
-        <!-- 统计 -->
         <div class="stats-bar">
             <div class="stat-card">
                 <div class="stat-value" id="totalMessages">0</div>
@@ -281,9 +280,7 @@
             </div>
         </div>
 
-        <!-- 主内容区 -->
         <div class="main-content">
-            <!-- Topic 列表 -->
             <div class="topics-panel">
                 <div class="panel-header">
                     <span>📋 Topics</span>
@@ -297,7 +294,6 @@
                 </div>
             </div>
 
-            <!-- 消息列表 -->
             <div class="messages-panel">
                 <div class="panel-header">
                     <span>📨 消息流</span>
@@ -319,8 +315,9 @@
     </div>
 
     <script type="module">
-        import mqtt from 'https://unpkg.com/mqtt@5.0.3/dist/mqtt.esm.js';
-
+        // 使用全局 mqtt 对象（通过 CDN 加载）
+        import mqtt from 'https://cdn.jsdelivr.net/npm/mqtt@5.0.3/dist/mqtt.esm.js';
+        
         let client = null;
         let messages = [];
         let topicStats = new Map();
@@ -328,19 +325,6 @@
         let selectedTopic = null;
         let messageTimer = null;
         let subscribedTopics = new Set();
-
-        // 从 localStorage 恢复配置
-        window.onload = () => {
-            const saved = localStorage.getItem('mqtt_config');
-            if (saved) {
-                try {
-                    const cfg = JSON.parse(saved);
-                    if (cfg.username) document.getElementById('username').value = cfg.username;
-                    if (cfg.clientId) document.getElementById('clientId').value = cfg.clientId;
-                    if (cfg.topic) document.getElementById('subscribeTopic').value = cfg.topic;
-                } catch {}
-            }
-        };
 
         window.connect = function() {
             const url = document.getElementById('wsUrl').value.trim();
@@ -352,11 +336,6 @@
             if (!url) { showToast('请填写 WebSocket URL', 'error'); return; }
             if (!clientId) { showToast('请填写 Client ID', 'error'); return; }
             if (!username) { showToast('请填写用户名', 'error'); return; }
-
-            // 保存配置
-            localStorage.setItem('mqtt_config', JSON.stringify({
-                username, clientId, topic
-            }));
 
             const options = {
                 clientId,
@@ -488,7 +467,6 @@
             renderTopics();
             renderMessages();
 
-            // 提示音
             if (document.getElementById('soundAlert').checked) {
                 playBeep();
             }
@@ -595,10 +573,6 @@
                 `;
             }
             list.innerHTML = html;
-
-            if (autoScroll && !selectedTopic && !filter) {
-                // 新消息在顶部，不需要滚动
-            }
         }
 
         window.filterMessages = function() {
