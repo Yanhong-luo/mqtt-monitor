@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MQTT 消息监控 - EMQX Cloud</title>
+    <script src="https://unpkg.com/mqtt@5.0.3/dist/mqtt.esm.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
+            padding: 20px 40px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .header h1 { font-size: 22px; display: flex; align-items: center; gap: 10px; }
+        .header h1::before { content: '☁️'; font-size: 26px; }
+        .status-badge {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 16px; border-radius: 20px;
+            font-size: 14px; font-weight: 500;
+        }
+        .status-connected { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+        .status-disconnected { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .status-connecting { background: rgba(234, 179, 8, 0.15); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.3); }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .status-connected .status-dot { background: #4ade80; animation: pulse 2s infinite; }
+        .status-disconnected .status-dot { background: #f87171; }
+        .status-connecting .status-dot { background: #eab308; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        .config-panel {
+            background: #1e293b; border-radius: 12px; padding: 20px;
+            margin-bottom: 20px; border: 1px solid #334155;
+        }
+        .config-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px;
+            margin-bottom: 15px;
+        }
+        .input-group { display: flex; flex-direction: column; gap: 6px; }
+        .input-group label { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+        .input-group input, .input-group select {
+            padding: 10px 14px; background: #0f172a; border: 1px solid #475569;
+            border-radius: 8px; color: #e2e8f0; font-size: 14px; outline: none; transition: border-color 0.2s;
+        }
+        .input-group input:focus, .input-group select:focus { border-color: #60a5fa; }
+        .input-group small { font-size: 11px; color: #64748b; }
+        
+        .btn {
+            padding: 10px 24px; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+            transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-primary:disabled { background: #475569; cursor: not-allowed; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-danger:hover { background: #dc2626; }
+        .btn-success { background: #22c55e; color: white; }
+        .btn-success:hover { background: #16a34a; }
+        
+        .stats-bar {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: #1e293b; border-radius: 12px; padding: 18px;
+            border: 1px solid #334155; text-align: center;
+        }
+        .stat-value { font-size: 28px; font-weight: 700; color: #60a5fa; line-height: 1; }
+        .stat-label { font-size: 12px; color: #94a3b8; margin-top: 6px; }
+        
+        .main-content { display: grid; grid-template-columns: 280px 1fr; gap: 20px; }
+        .topics-panel, .messages-panel {
+            background: #1e293b; border-radius: 12px; border: 1px solid #334155;
+            overflow: hidden; display: flex; flex-direction: column;
+        }
+        .panel-header {
+            padding: 14px 18px; background: #0f172a;
+            border-bottom: 1px solid #334155; font-size: 14px; font-weight: 600;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .topic-list { flex: 1; overflow-y: auto; max-height: 500px; }
+        .topic-item {
+            padding: 10px 18px; border-bottom: 1px solid #1e293b;
+            cursor: pointer; transition: all 0.2s;
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .topic-item:hover { background: #252f47; }
+        .topic-item.active { background: #334155; border-left: 3px solid #3b82f6; }
+        .topic-name { font-size: 12px; color: #cbd5e1; word-break: break-all; font-family: monospace; }
+        .topic-count {
+            background: #3b82f6; color: white; font-size: 10px;
+            padding: 2px 8px; border-radius: 10px; min-width: 22px; text-align: center;
+            flex-shrink: 0; margin-left: 8px;
+        }
+        
+        .messages-list { flex: 1; overflow-y: auto; max-height: 550px; padding: 10px; }
+        .message-item {
+            background: #0f172a; border-radius: 10px; padding: 12px 16px;
+            margin-bottom: 8px; border-left: 3px solid #3b82f6;
+            animation: slideIn 0.25s ease;
+        }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .message-header {
+            display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;
+            flex-wrap: wrap; gap: 6px;
+        }
+        .message-topic {
+            font-size: 11px; color: #60a5fa; background: rgba(96, 165, 250, 0.1);
+            padding: 2px 8px; border-radius: 4px; font-family: monospace;
+        }
+        .message-time { font-size: 11px; color: #64748b; font-family: monospace; }
+        .message-payload {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace; font-size: 12px;
+            color: #e2e8f0; background: #1e293b; padding: 10px;
+            border-radius: 6px; overflow-x: auto; white-space: pre-wrap; word-break: break-word;
+            max-height: 200px; overflow-y: auto;
+        }
+        .message-payload.json { color: #a5f3fc; }
+        .qos-badge {
+            font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-left: 6px;
+        }
+        .qos-0 { background: #374151; color: #9ca3af; }
+        .qos-1 { background: #1e3a5f; color: #60a5fa; }
+        .qos-2 { background: #3f1e5f; color: #c084fc; }
+        
+        .empty-state { text-align: center; padding: 50px 20px; color: #64748b; }
+        .empty-state-icon { font-size: 40px; margin-bottom: 12px; }
+        
+        .filter-bar {
+            padding: 10px 18px; background: #0f172a;
+            border-bottom: 1px solid #334155; display: flex; gap: 10px; align-items: center;
+        }
+        .filter-bar input {
+            flex: 1; padding: 8px 12px; background: #1e293b;
+            border: 1px solid #475569; border-radius: 6px;
+            color: #e2e8f0; font-size: 13px; outline: none;
+        }
+        .filter-bar input:focus { border-color: #60a5fa; }
+        .clear-btn {
+            background: transparent; border: 1px solid #475569;
+            color: #94a3b8; padding: 8px 14px; border-radius: 6px;
+            cursor: pointer; font-size: 12px; transition: all 0.2s;
+        }
+        .clear-btn:hover { border-color: #ef4444; color: #ef4444; }
+        
+        .toast {
+            position: fixed; top: 20px; right: 20px;
+            padding: 12px 20px; border-radius: 8px;
+            font-size: 13px; font-weight: 500;
+            animation: toastIn 0.3s ease; z-index: 1000;
+            max-width: 400px; word-break: break-word;
+        }
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(20px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+        .toast-success { background: #166534; color: #86efac; border: 1px solid #22c55e; }
+        .toast-error { background: #7f1d1d; color: #fca5a5; border: 1px solid #ef4444; }
+        .toast-info { background: #1e3a5f; color: #93c5fd; border: 1px solid #3b82f6; }
+        
+        .toggle-row {
+            display: flex; align-items: center; gap: 10px; margin-bottom: 15px;
+        }
+        .toggle-switch {
+            position: relative; width: 44px; height: 24px;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background: #475569; border-radius: 24px; transition: 0.3s;
+        }
+        .toggle-slider:before {
+            position: absolute; content: ''; height: 18px; width: 18px;
+            left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: 0.3s;
+        }
+        .toggle-switch input:checked + .toggle-slider { background: #3b82f6; }
+        .toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
+        .toggle-label { font-size: 13px; color: #cbd5e1; }
+        
+        @media (max-width: 768px) {
+            .main-content { grid-template-columns: 1fr; }
+            .header { padding: 15px 20px; }
+            .container { padding: 15px; }
+            .config-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>MQTT 消息监控中心</h1>
+        <div class="status-badge status-disconnected" id="statusBadge">
+            <span class="status-dot"></span>
+            <span id="statusText">未连接</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 连接配置 -->
+        <div class="config-panel">
+            <div class="config-grid">
+                <div class="input-group">
+                    <label>WebSocket URL</label>
+                    <input type="text" id="wsUrl" value="wss://c21ee151.ala.dedicated.aliyun.emqxcloud.cn:8084/mqtt">
+                    <small>推荐使用 WSS (8084端口)，兼容所有部署场景</small>
+                </div>
+                <div class="input-group">
+                    <label>Client ID</label>
+                    <input type="text" id="clientId" value="web_monitor_001">
+                </div>
+                <div class="input-group">
+                    <label>用户名 <span style="color:#ef4444">*</span></label>
+                    <input type="text" id="username" placeholder="EMQX Cloud 认证用户名">
+                </div>
+                <div class="input-group">
+                    <label>密码 <span style="color:#ef4444">*</span></label>
+                    <input type="password" id="password" placeholder="EMQX Cloud 认证密码">
+                </div>
+                <div class="input-group">
+                    <label>订阅 Topic</label>
+                    <input type="text" id="subscribeTopic" value="#" placeholder="# = 订阅所有">
+                    <small># 通配符可接收所有主题消息</small>
+                </div>
+            </div>
+            
+            <div class="toggle-row">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="autoScroll" checked>
+                    <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label">自动滚动到新消息</span>
+                
+                <label class="toggle-switch" style="margin-left: 20px;">
+                    <input type="checkbox" id="soundAlert">
+                    <span class="toggle-slider"></span>
+                </label>
+                <span class="toggle-label">新消息提示音</span>
+            </div>
+            
+            <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button class="btn btn-primary" id="connectBtn" onclick="connect()">🔗 连接</button>
+                <button class="btn btn-danger" onclick="disconnect()">❌ 断开</button>
+                <button class="btn btn-success" onclick="addTopic()">➕ 添加订阅</button>
+                <button class="btn" style="background: #6366f1; color: white;" onclick="exportData()">📥 导出数据</button>
+            </div>
+        </div>
+
+        <!-- 统计 -->
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-value" id="totalMessages">0</div>
+                <div class="stat-label">总消息数</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="topicsCount">0</div>
+                <div class="stat-label">Topic 数量</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="msgRate">0</div>
+                <div class="stat-label">消息/分钟</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="lastMsgTime">--</div>
+                <div class="stat-label">最后消息</div>
+            </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="main-content">
+            <!-- Topic 列表 -->
+            <div class="topics-panel">
+                <div class="panel-header">
+                    <span>📋 Topics</span>
+                    <span id="subscribedCount" style="font-size: 12px; color: #94a3b8;">0</span>
+                </div>
+                <div class="topic-list" id="topicList">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <div>暂无订阅</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 消息列表 -->
+            <div class="messages-panel">
+                <div class="panel-header">
+                    <span>📨 消息流</span>
+                    <span id="currentTopic" style="font-size: 12px; color: #94a3b8;">全部</span>
+                </div>
+                <div class="filter-bar">
+                    <input type="text" id="filterInput" placeholder="🔍 过滤 Topic 或消息内容..." oninput="filterMessages()">
+                    <button class="clear-btn" onclick="clearMessages()">🗑️ 清空</button>
+                </div>
+                <div class="messages-list" id="messagesList">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📡</div>
+                        <div>等待消息...</div>
+                        <div style="font-size: 13px; margin-top: 8px;">连接 EMQX Cloud 后，MQTT 消息将实时显示</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        import mqtt from 'https://unpkg.com/mqtt@5.0.3/dist/mqtt.esm.js';
+
+        let client = null;
+        let messages = [];
+        let topicStats = new Map();
+        let messageHistory = [];
+        let selectedTopic = null;
+        let messageTimer = null;
+        let subscribedTopics = new Set();
+
+        // 从 localStorage 恢复配置
+        window.onload = () => {
+            const saved = localStorage.getItem('mqtt_config');
+            if (saved) {
+                try {
+                    const cfg = JSON.parse(saved);
+                    if (cfg.username) document.getElementById('username').value = cfg.username;
+                    if (cfg.clientId) document.getElementById('clientId').value = cfg.clientId;
+                    if (cfg.topic) document.getElementById('subscribeTopic').value = cfg.topic;
+                } catch {}
+            }
+        };
+
+        window.connect = function() {
+            const url = document.getElementById('wsUrl').value.trim();
+            const clientId = document.getElementById('clientId').value.trim();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const topic = document.getElementById('subscribeTopic').value.trim();
+
+            if (!url) { showToast('请填写 WebSocket URL', 'error'); return; }
+            if (!clientId) { showToast('请填写 Client ID', 'error'); return; }
+            if (!username) { showToast('请填写用户名', 'error'); return; }
+
+            // 保存配置
+            localStorage.setItem('mqtt_config', JSON.stringify({
+                username, clientId, topic
+            }));
+
+            const options = {
+                clientId,
+                clean: true,
+                connectTimeout: 15000,
+                reconnectPeriod: 5000,
+            };
+
+            if (username) options.username = username;
+            if (password) options.password = password;
+
+            updateStatus('connecting', '连接中...');
+            document.getElementById('connectBtn').disabled = true;
+
+            try {
+                client = mqtt.connect(url, options);
+
+                client.on('connect', (packet) => {
+                    updateStatus('connected', '已连接');
+                    document.getElementById('connectBtn').disabled = false;
+                    showToast('✅ 连接成功！', 'success');
+                    subscribe(topic);
+                    startMessageRateTimer();
+                });
+
+                client.on('message', (topic, payload, packet) => {
+                    handleMessage(topic, payload, packet);
+                });
+
+                client.on('error', (err) => {
+                    updateStatus('error', '错误');
+                    document.getElementById('connectBtn').disabled = false;
+                    showToast('❌ ' + err.message, 'error');
+                });
+
+                client.on('close', () => {
+                    updateStatus('disconnected', '已断开');
+                    document.getElementById('connectBtn').disabled = false;
+                    stopMessageRateTimer();
+                });
+
+                client.on('offline', () => {
+                    updateStatus('disconnected', '离线');
+                });
+
+                client.on('reconnect', () => {
+                    updateStatus('connecting', '重连中...');
+                });
+
+            } catch (err) {
+                document.getElementById('connectBtn').disabled = false;
+                showToast('连接失败: ' + err.message, 'error');
+            }
+        };
+
+        window.disconnect = function() {
+            if (client) {
+                client.end();
+                client = null;
+            }
+            subscribedTopics.clear();
+            messages = [];
+            topicStats.clear();
+            messageHistory = [];
+            selectedTopic = null;
+            updateStats();
+            renderTopics();
+            renderMessages();
+            showToast('已断开连接', 'info');
+        };
+
+        window.subscribe = function(topic) {
+            if (!client || !client.connected) {
+                showToast('请先连接 MQTT', 'error');
+                return;
+            }
+            client.subscribe(topic, (err) => {
+                if (err) {
+                    showToast(`订阅失败: ${err.message}`, 'error');
+                } else {
+                    subscribedTopics.add(topic);
+                    if (!topicStats.has(topic)) {
+                        topicStats.set(topic, { count: 0, lastTime: null });
+                    }
+                    renderTopics();
+                    showToast(`✅ 已订阅: ${topic}`, 'success');
+                }
+            });
+        };
+
+        window.addTopic = function() {
+            const topic = prompt('输入要订阅的 Topic:', 'test/#');
+            if (topic) subscribe(topic);
+        };
+
+        function handleMessage(topic, payload, packet) {
+            const now = new Date();
+            const message = {
+                id: Date.now() + Math.random(),
+                topic,
+                payload: payload.toString(),
+                qos: packet.qos,
+                time: now,
+                timeStr: now.toLocaleTimeString('zh-CN') + '.' + String(now.getMilliseconds()).padStart(3, '0'),
+            };
+
+            try {
+                const json = JSON.parse(message.payload);
+                message.isJson = true;
+                message.formattedPayload = JSON.stringify(json, null, 2);
+            } catch {
+                message.isJson = false;
+                message.formattedPayload = message.payload;
+            }
+
+            messages.unshift(message);
+            if (messages.length > 1000) messages.pop();
+
+            const stats = topicStats.get(topic) || { count: 0, lastTime: null };
+            stats.count++;
+            stats.lastTime = now;
+            topicStats.set(topic, stats);
+
+            messageHistory.push(now);
+            const oneMinuteAgo = new Date(now - 60000);
+            messageHistory = messageHistory.filter(t => t > oneMinuteAgo);
+
+            updateStats();
+            renderTopics();
+            renderMessages();
+
+            // 提示音
+            if (document.getElementById('soundAlert').checked) {
+                playBeep();
+            }
+        }
+
+        function playBeep() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.frequency.value = 800;
+                gain.gain.value = 0.1;
+                osc.start();
+                osc.stop(ctx.currentTime + 0.1);
+            } catch {}
+        }
+
+        function updateStats() {
+            document.getElementById('totalMessages').textContent = messages.length;
+            document.getElementById('topicsCount').textContent = topicStats.size;
+            document.getElementById('msgRate').textContent = messageHistory.length;
+            const lastMsg = messages[0];
+            document.getElementById('lastMsgTime').textContent = lastMsg ? lastMsg.timeStr.split('.')[0] : '--';
+        }
+
+        function renderTopics() {
+            const list = document.getElementById('topicList');
+            const count = document.getElementById('subscribedCount');
+            
+            if (topicStats.size === 0) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <div>暂无消息</div>
+                    </div>`;
+                count.textContent = '0';
+                return;
+            }
+
+            count.textContent = topicStats.size + ' 个';
+            const sortedTopics = Array.from(topicStats.entries()).sort((a, b) => b[1].count - a[1].count);
+            
+            let html = '';
+            for (const [topic, stats] of sortedTopics) {
+                const isActive = selectedTopic === topic;
+                html += `
+                    <div class="topic-item ${isActive ? 'active' : ''}" onclick="selectTopic('${topic.replace(/'/g, "\\'")}')">
+                        <span class="topic-name">${topic}</span>
+                        <span class="topic-count">${stats.count}</span>
+                    </div>
+                `;
+            }
+            list.innerHTML = html;
+        }
+
+        window.selectTopic = function(topic) {
+            selectedTopic = selectedTopic === topic ? null : topic;
+            document.getElementById('currentTopic').textContent = selectedTopic || '全部';
+            renderTopics();
+            renderMessages();
+        };
+
+        function renderMessages() {
+            const list = document.getElementById('messagesList');
+            const filter = document.getElementById('filterInput').value.toLowerCase();
+            const autoScroll = document.getElementById('autoScroll').checked;
+            
+            let displayMessages = selectedTopic 
+                ? messages.filter(m => m.topic === selectedTopic)
+                : messages;
+            
+            if (filter) {
+                displayMessages = displayMessages.filter(m => 
+                    m.payload.toLowerCase().includes(filter) || 
+                    m.topic.toLowerCase().includes(filter)
+                );
+            }
+
+            if (displayMessages.length === 0) {
+                list.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📭</div>
+                        <div>${selectedTopic ? '该 Topic 暂无消息' : '暂无消息'}</div>
+                    </div>`;
+                return;
+            }
+
+            let html = '';
+            for (const msg of displayMessages.slice(0, 200)) {
+                const qosClass = `qos-${msg.qos}`;
+                html += `
+                    <div class="message-item">
+                        <div class="message-header">
+                            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                                <span class="message-topic">${msg.topic}</span>
+                                <span class="qos-badge ${qosClass}">QoS ${msg.qos}</span>
+                            </div>
+                            <span class="message-time">${msg.timeStr}</span>
+                        </div>
+                        <div class="message-payload ${msg.isJson ? 'json' : ''}">${escapeHtml(msg.formattedPayload)}</div>
+                    </div>
+                `;
+            }
+            list.innerHTML = html;
+
+            if (autoScroll && !selectedTopic && !filter) {
+                // 新消息在顶部，不需要滚动
+            }
+        }
+
+        window.filterMessages = function() {
+            renderMessages();
+        };
+
+        window.clearMessages = function() {
+            if (!confirm('确定清空所有消息吗？')) return;
+            messages = [];
+            topicStats.clear();
+            messageHistory = [];
+            selectedTopic = null;
+            updateStats();
+            renderTopics();
+            renderMessages();
+            showToast('已清空', 'info');
+        };
+
+        window.exportData = function() {
+            if (messages.length === 0) {
+                showToast('没有数据可导出', 'error');
+                return;
+            }
+            const data = messages.map(m => ({
+                time: m.timeStr,
+                topic: m.topic,
+                qos: m.qos,
+                payload: m.payload
+            }));
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `mqtt-messages-${new Date().toISOString().slice(0,19)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast('📥 数据已导出', 'success');
+        };
+
+        function updateStatus(state, text) {
+            const badge = document.getElementById('statusBadge');
+            const statusText = document.getElementById('statusText');
+            badge.className = 'status-badge';
+            if (state === 'connected') badge.classList.add('status-connected');
+            else if (state === 'connecting') badge.classList.add('status-connecting');
+            else badge.classList.add('status-disconnected');
+            statusText.textContent = text;
+        }
+
+        function startMessageRateTimer() {
+            messageTimer = setInterval(() => {
+                const now = new Date();
+                const oneMinuteAgo = new Date(now - 60000);
+                messageHistory = messageHistory.filter(t => t > oneMinuteAgo);
+                document.getElementById('msgRate').textContent = messageHistory.length;
+            }, 5000);
+        }
+
+        function stopMessageRateTimer() {
+            if (messageTimer) {
+                clearInterval(messageTimer);
+                messageTimer = null;
+            }
+        }
+
+        function showToast(msg, type) {
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
