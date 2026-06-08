@@ -1,0 +1,585 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PowerBank MQTT 监控中心</title>
+    <script src="mqtt.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #1e3a5f 0%, #0f172a 100%);
+            padding: 15px 30px;
+            border-bottom: 1px solid #334155;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .header h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; }
+        .header h1::before { content: '🔋'; font-size: 24px; }
+        .status-badge {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 16px; border-radius: 20px;
+            font-size: 13px; font-weight: 500;
+        }
+        .status-connected { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+        .status-disconnected { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .status-connecting { background: rgba(234, 179, 8, 0.15); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.3); }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .status-connected .status-dot { background: #4ade80; animation: pulse 2s infinite; }
+        .status-disconnected .status-dot { background: #f87171; }
+        .status-connecting .status-dot { background: #eab308; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        /* 连接配置 */
+        .config-panel {
+            background: #1e293b; border-radius: 12px; padding: 20px;
+            margin-bottom: 20px; border: 1px solid #334155;
+        }
+        .config-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;
+            margin-bottom: 15px;
+        }
+        .input-group { display: flex; flex-direction: column; gap: 5px; }
+        .input-group label { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+        .input-group input {
+            padding: 10px 14px; background: #0f172a; border: 1px solid #475569;
+            border-radius: 8px; color: #e2e8f0; font-size: 14px; outline: none;
+        }
+        .input-group input:focus { border-color: #60a5fa; }
+        
+        .btn {
+            padding: 10px 20px; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+            transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-primary:hover { background: #2563eb; }
+        .btn-danger { background: #ef4444; color: white; }
+        .btn-success { background: #22c55e; color: white; }
+        .btn-warning { background: #f59e0b; color: white; }
+        .btn:disabled { background: #475569; cursor: not-allowed; opacity: 0.6; }
+        
+        /* 主布局 */
+        .main-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        /* 面板通用 */
+        .panel {
+            background: #1e293b; border-radius: 12px; border: 1px solid #334155;
+            overflow: hidden;
+        }
+        .panel-header {
+            padding: 14px 18px; background: #0f172a;
+            border-bottom: 1px solid #334155;
+            font-size: 15px; font-weight: 600;
+            display: flex; align-items: center; gap: 8px;
+        }
+        
+        /* 上行数据 */
+        .data-card {
+            padding: 16px; border-bottom: 1px solid #1e293b;
+        }
+        .data-card:last-child { border-bottom: none; }
+        .data-card-title {
+            font-size: 13px; color: #94a3b8; margin-bottom: 10px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .data-display {
+            background: #0f172a; border: 1px solid #334155;
+            border-radius: 8px; padding: 12px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px; color: #a5f3fc;
+            min-height: 60px; max-height: 150px;
+            overflow-y: auto; white-space: pre-wrap;
+            word-break: break-word;
+            line-height: 1.6;
+        }
+        .data-display:empty::before {
+            content: '等待数据...'; color: #475569;
+        }
+        
+        /* GPS 特殊样式 */
+        .gps-coords {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 8px;
+        }
+        .coord-box {
+            background: #0f172a; border: 1px solid #334155;
+            border-radius: 6px; padding: 10px;
+            text-align: center;
+        }
+        .coord-label {
+            font-size: 11px; color: #64748b; margin-bottom: 4px;
+        }
+        .coord-value {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 16px; color: #4ade80; font-weight: 600;
+        }
+        
+        /* 下行命令 */
+        .command-row {
+            padding: 16px; border-bottom: 1px solid #1e293b;
+        }
+        .command-row:last-child { border-bottom: none; }
+        .command-label {
+            font-size: 13px; color: #cbd5e1; margin-bottom: 10px;
+            font-family: monospace;
+        }
+        .command-input {
+            width: 100%;
+            padding: 10px 14px; background: #0f172a;
+            border: 1px solid #475569; border-radius: 8px;
+            color: #e2e8f0; font-size: 13px;
+            font-family: monospace; margin-bottom: 10px;
+        }
+        .command-input:focus { outline: none; border-color: #60a5fa; }
+        .command-result {
+            margin-top: 10px;
+            padding: 10px 14px; background: #0f172a;
+            border: 1px solid #334155; border-radius: 8px;
+            color: #86efac; font-size: 12px;
+            font-family: monospace; display: none;
+        }
+        .command-result.show { display: block; }
+        .command-result.error { color: #f87171; border-color: #ef4444; }
+        
+        /* 统计 */
+        .stats-bar {
+            display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: #1e293b; border-radius: 12px; padding: 16px;
+            border: 1px solid #334155; text-align: center;
+        }
+        .stat-value { font-size: 24px; font-weight: 700; color: #60a5fa; }
+        .stat-label { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+        
+        /* 日志 */
+        .log-panel { margin-top: 20px; }
+        .log-container {
+            max-height: 250px; overflow-y: auto; padding: 10px;
+        }
+        .log-entry {
+            padding: 6px 12px; border-bottom: 1px solid #1e293b;
+            font-size: 12px; font-family: monospace;
+        }
+        .log-time { color: #64748b; margin-right: 8px; }
+        .log-topic { color: #60a5fa; margin-right: 8px; }
+        .log-payload { color: #cbd5e1; }
+        
+        @media (max-width: 900px) {
+            .main-layout { grid-template-columns: 1fr; }
+            .stats-bar { grid-template-columns: repeat(2, 1fr); }
+            .gps-coords { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>PowerBank MQTT 监控中心</h1>
+        <div class="status-badge status-disconnected" id="statusBadge">
+            <span class="status-dot"></span>
+            <span id="statusText">未连接</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 连接配置 -->
+        <div class="config-panel">
+            <div class="config-grid">
+                <div class="input-group">
+                    <label>WebSocket URL</label>
+                    <input type="text" id="wsUrl" value="wss://c21ee151.ala.dedicated.aliyun.emqxcloud.cn:8084/mqtt">
+                </div>
+                <div class="input-group">
+                    <label>Client ID</label>
+                    <input type="text" id="clientId" value="web_monitor_001">
+                </div>
+                <div class="input-group">
+                    <label>用户名</label>
+                    <input type="text" id="username" placeholder="EMQX Cloud 用户名">
+                </div>
+                <div class="input-group">
+                    <label>密码</label>
+                    <input type="password" id="password" placeholder="EMQX Cloud 密码">
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn btn-primary" id="connectBtn" onclick="connect()">🔗 连接</button>
+                <button class="btn btn-danger" onclick="disconnect()">❌ 断开</button>
+            </div>
+        </div>
+
+        <!-- 统计 -->
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-value" id="statStatus">--</div>
+                <div class="stat-label">设备状态</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statTelemetry">0</div>
+                <div class="stat-label">遥测数据</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statGPS">0</div>
+                <div class="stat-label">GPS 定位</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statCommands">0</div>
+                <div class="stat-label">命令下发</div>
+            </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="main-layout">
+            <!-- 左侧：上行数据 -->
+            <div class="panel">
+                <div class="panel-header">📡 上行数据监控</div>
+                
+                <!-- 设备状态 -->
+                <div class="data-card">
+                    <div class="data-card-title">📶 /powerbank/status</div>
+                    <div class="data-display" id="statusData"></div>
+                </div>
+                
+                <!-- 自检结果 -->
+                <div class="data-card">
+                    <div class="data-card-title">🔍 /powerbank/self_test</div>
+                    <div class="data-display" id="selfTestData"></div>
+                </div>
+                
+                <!-- 命令确认 -->
+                <div class="data-card">
+                    <div class="data-card-title">✅ /powerbank/ack</div>
+                    <div class="data-display" id="ackData"></div>
+                </div>
+                
+                <!-- 遥测数据 -->
+                <div class="data-card">
+                    <div class="data-card-title">📊 /powerbank/telemetry/data</div>
+                    <div class="data-display" id="telemetryData"></div>
+                </div>
+                
+                <!-- GPS 数据 -->
+                <div class="data-card">
+                    <div class="data-card-title">📍 /powerbank/telemetry/gps</div>
+                    <div class="data-display" id="gpsData"></div>
+                    <div class="gps-coords">
+                        <div class="coord-box">
+                            <div class="coord-label">纬度 (Latitude)</div>
+                            <div class="coord-value" id="gpsLat">--</div>
+                        </div>
+                        <div class="coord-box">
+                            <div class="coord-label">经度 (Longitude)</div>
+                            <div class="coord-value" id="gpsLng">--</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 配对发现 -->
+                <div class="data-card">
+                    <div class="data-card-title">🔌 /pairing/discover</div>
+                    <div class="data-display" id="pairingData"></div>
+                </div>
+            </div>
+
+            <!-- 右侧：下行命令 -->
+            <div class="panel">
+                <div class="panel-header">🎮 下行命令控制</div>
+                
+                <!-- 远程关机 -->
+                <div class="command-row">
+                    <div class="command-label">/powerbank/command/shutdown</div>
+                    <input type="text" class="command-input" id="shutdownInput" 
+                           placeholder='{"device_id":"xxx","correlation_id":"uuid"}'>
+                    <button class="btn btn-warning" onclick="sendCommand('shutdown')">⏻ 发送关机命令</button>
+                    <div class="command-result" id="shutdownResult"></div>
+                </div>
+                
+                <!-- 配对配置 -->
+                <div class="command-row">
+                    <div class="command-label">/pairing/configure</div>
+                    <input type="text" class="command-input" id="configureInput" 
+                           placeholder='{"client_id":"xxx","inverter_serial":"xxx"}'>
+                    <button class="btn btn-success" onclick="sendCommand('configure')">⚙️ 发送配对配置</button>
+                    <div class="command-result" id="configureResult"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日志面板 -->
+        <div class="panel log-panel">
+            <div class="panel-header">📝 实时日志</div>
+            <div class="log-container" id="logContainer">
+                <div class="log-entry" style="color: #64748b;">等待连接...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let client = null;
+        let commandCount = 0;
+        let telemetryCount = 0;
+        let gpsCount = 0;
+
+        function connect() {
+            const url = document.getElementById('wsUrl').value.trim();
+            const clientId = document.getElementById('clientId').value.trim();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!url || !clientId || !username) {
+                log('系统', '请填写完整的连接信息');
+                return;
+            }
+
+            const options = {
+                clientId: clientId,
+                clean: true,
+                connectTimeout: 15000,
+                reconnectPeriod: 5000,
+            };
+            if (username) options.username = username;
+            if (password) options.password = password;
+
+            updateStatus('connecting', '连接中...');
+            document.getElementById('connectBtn').disabled = true;
+
+            try {
+                client = mqtt.connect(url, options);
+
+                client.on('connect', function() {
+                    updateStatus('connected', '已连接');
+                    document.getElementById('connectBtn').disabled = false;
+                    log('系统', '✅ MQTT 连接成功');
+                    
+                    // 订阅所有上行 topic
+                    const topics = [
+                        '/powerbank/status',
+                        '/powerbank/self_test',
+                        '/powerbank/ack',
+                        '/powerbank/telemetry/data',
+                        '/powerbank/telemetry/gps',
+                        '/pairing/discover'
+                    ];
+                    
+                    topics.forEach(function(topic) {
+                        client.subscribe(topic, function(err) {
+                            if (!err) log('订阅', '✅ ' + topic);
+                        });
+                    });
+                });
+
+                client.on('message', function(topic, payload) {
+                    handleMessage(topic, payload);
+                });
+
+                client.on('error', function(err) {
+                    updateStatus('error', '错误');
+                    document.getElementById('connectBtn').disabled = false;
+                    log('错误', err.message);
+                });
+
+                client.on('close', function() {
+                    updateStatus('disconnected', '已断开');
+                    document.getElementById('connectBtn').disabled = false;
+                });
+
+            } catch (err) {
+                document.getElementById('connectBtn').disabled = false;
+                log('错误', '连接失败: ' + err.message);
+            }
+        }
+
+        function disconnect() {
+            if (client) {
+                client.end();
+                client = null;
+            }
+            updateStatus('disconnected', '已断开');
+            log('系统', '已断开连接');
+        }
+
+        function handleMessage(topic, payload) {
+            const data = payload.toString();
+            let jsonData = null;
+            
+            try {
+                jsonData = JSON.parse(data);
+            } catch (e) {
+                jsonData = null;
+            }
+
+            log('接收', topic + ' | ' + data.substring(0, 200));
+
+            switch (topic) {
+                case '/powerbank/status':
+                    displayData('statusData', jsonData || data);
+                    document.getElementById('statStatus').textContent = 
+                        (jsonData && jsonData.status) ? jsonData.status : '在线';
+                    break;
+                    
+                case '/powerbank/self_test':
+                    displayData('selfTestData', jsonData || data);
+                    break;
+                    
+                case '/powerbank/ack':
+                    displayData('ackData', jsonData || data);
+                    break;
+                    
+                case '/powerbank/telemetry/data':
+                    displayData('telemetryData', jsonData || data);
+                    telemetryCount++;
+                    document.getElementById('statTelemetry').textContent = telemetryCount;
+                    break;
+                    
+                case '/powerbank/telemetry/gps':
+                    displayData('gpsData', jsonData || data);
+                    gpsCount++;
+                    document.getElementById('statGPS').textContent = gpsCount;
+                    // 显示坐标
+                    if (jsonData) {
+                        const lat = jsonData.latitude || jsonData.lat;
+                        const lng = jsonData.longitude || jsonData.lng || jsonData.lon;
+                        if (lat !== undefined && lng !== undefined) {
+                            document.getElementById('gpsLat').textContent = lat;
+                            document.getElementById('gpsLng').textContent = lng;
+                        }
+                    }
+                    break;
+                    
+                case '/pairing/discover':
+                    displayData('pairingData', jsonData || data);
+                    break;
+            }
+        }
+
+        function displayData(elementId, data) {
+            const el = document.getElementById(elementId);
+            const time = new Date().toLocaleTimeString('zh-CN');
+            
+            if (typeof data === 'object') {
+                el.textContent = `[${time}]\n${JSON.stringify(data, null, 2)}`;
+            } else {
+                el.textContent = `[${time}]\n${data}`;
+            }
+            
+            // 高亮动画
+            el.style.borderColor = '#60a5fa';
+            setTimeout(function() {
+                el.style.borderColor = '#334155';
+            }, 500);
+        }
+
+        function sendCommand(type) {
+            if (!client || !client.connected) {
+                log('错误', '请先连接 MQTT');
+                return;
+            }
+
+            let topic, payload, resultId;
+            
+            if (type === 'shutdown') {
+                topic = '/powerbank/command/shutdown';
+                const input = document.getElementById('shutdownInput').value.trim();
+                try {
+                    payload = input ? JSON.parse(input) : {
+                        device_id: 'ESP32-C3-MINI-1',
+                        correlation_id: generateUUID(),
+                        timestamp: Date.now()
+                    };
+                } catch (e) {
+                    showResult('shutdownResult', '❌ JSON 格式错误: ' + e.message, true);
+                    return;
+                }
+                resultId = 'shutdownResult';
+                
+            } else if (type === 'configure') {
+                topic = '/pairing/configure';
+                const input = document.getElementById('configureInput').value.trim();
+                try {
+                    payload = input ? JSON.parse(input) : {
+                        client_id: 'web_monitor_001',
+                        inverter_serial: 'INV-' + generateUUID().slice(0, 8),
+                        timestamp: Date.now()
+                    };
+                } catch (e) {
+                    showResult('configureResult', '❌ JSON 格式错误: ' + e.message, true);
+                    return;
+                }
+                resultId = 'configureResult';
+            }
+
+            const payloadStr = JSON.stringify(payload);
+            
+            client.publish(topic, payloadStr, function(err) {
+                if (err) {
+                    showResult(resultId, '❌ 发送失败: ' + err.message, true);
+                } else {
+                    commandCount++;
+                    document.getElementById('statCommands').textContent = commandCount;
+                    showResult(resultId, '✅ 发送成功\n' + payloadStr);
+                    log('发送', topic + ' | ' + payloadStr);
+                }
+            });
+        }
+
+        function showResult(elementId, message, isError) {
+            const el = document.getElementById(elementId);
+            el.textContent = message;
+            el.className = 'command-result show' + (isError ? ' error' : '');
+            setTimeout(function() {
+                el.className = 'command-result';
+            }, 5000);
+        }
+
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        function log(type, message) {
+            const container = document.getElementById('logContainer');
+            const time = new Date().toLocaleTimeString('zh-CN');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-topic">${type}:</span><span class="log-payload">${message}</span>`;
+            container.insertBefore(entry, container.firstChild);
+            
+            while (container.children.length > 100) {
+                container.removeChild(container.lastChild);
+            }
+        }
+
+        function updateStatus(state, text) {
+            const badge = document.getElementById('statusBadge');
+            const statusText = document.getElementById('statusText');
+            badge.className = 'status-badge';
+            if (state === 'connected') badge.classList.add('status-connected');
+            else if (state === 'connecting') badge.classList.add('status-connecting');
+            else badge.classList.add('status-disconnected');
+            statusText.textContent = text;
+        }
+    </script>
+</body>
+</html>
