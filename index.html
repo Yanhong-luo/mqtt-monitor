@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PowerBank MQTT 监控中心</title>
+    <script src="mqtt.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0e1a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        .header {
+            background: linear-gradient(135deg, #0f1a3d 0%, #0a0e1a 100%);
+            padding: 15px 30px;
+            border-bottom: 1px solid #1e293b;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 20px; display: flex; align-items: center; gap: 10px; }
+        .header h1::before { content: '🔋'; font-size: 24px; }
+        .status-badge {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 16px; border-radius: 20px;
+            font-size: 13px; font-weight: 500;
+        }
+        .status-connected { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34, 197, 94, 0.3); }
+        .status-disconnected { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+        .status-connecting { background: rgba(234, 179, 8, 0.15); color: #eab308; border: 1px solid rgba(234, 179, 8, 0.3); }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .status-connected .status-dot { background: #4ade80; animation: pulse 2s infinite; }
+        .status-disconnected .status-dot { background: #f87171; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+        
+        .container { max-width: 1600px; margin: 0 auto; padding: 20px; }
+        
+        /* 连接配置 */
+        .config-panel {
+            background: #111827; border-radius: 12px; padding: 20px;
+            margin-bottom: 20px; border: 1px solid #1e293b;
+        }
+        .config-grid {
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px;
+            margin-bottom: 15px;
+        }
+        .input-group { display: flex; flex-direction: column; gap: 5px; }
+        .input-group label { font-size: 11px; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px; }
+        .input-group input {
+            padding: 10px 14px; background: #0a0e1a; border: 1px solid #334155;
+            border-radius: 8px; color: #e2e8f0; font-size: 14px; outline: none;
+        }
+        .input-group input:focus { border-color: #3b82f6; }
+        
+        .btn {
+            padding: 10px 20px; border: none; border-radius: 8px;
+            font-size: 14px; font-weight: 600; cursor: pointer;
+            transition: all 0.2s; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-primary { background: #2563eb; color: white; }
+        .btn-primary:hover { background: #1d4ed8; }
+        .btn-danger { background: #dc2626; color: white; }
+        .btn-warning { background: #d97706; color: white; }
+        .btn-success { background: #059669; color: white; }
+        .btn:disabled { background: #374151; cursor: not-allowed; opacity: 0.6; }
+        
+        /* 主布局：3列 */
+        .main-layout {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+        @media (max-width: 1200px) {
+            .main-layout { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 768px) {
+            .main-layout { grid-template-columns: 1fr; }
+        }
+        
+        /* 面板通用 */
+        .panel {
+            background: #111827; border-radius: 12px; border: 1px solid #1e293b;
+            overflow: hidden;
+        }
+        .panel-header {
+            padding: 14px 18px; background: #0f172a;
+            border-bottom: 1px solid #1e293b;
+            font-size: 14px; font-weight: 600;
+            display: flex; align-items: center; gap: 8px;
+        }
+        
+        /* 设备状态卡片 */
+        .status-indicator {
+            padding: 20px; text-align: center;
+        }
+        .status-big {
+            font-size: 48px; margin-bottom: 8px;
+        }
+        .status-text {
+            font-size: 18px; font-weight: 600;
+        }
+        .status-online { color: #4ade80; }
+        .status-offline { color: #f87171; }
+        .status-unknown { color: #94a3b8; }
+        .last-will-info {
+            margin-top: 15px; padding: 12px;
+            background: #0a0e1a; border-radius: 8px;
+            font-size: 12px; color: #64748b;
+        }
+        
+        /* 遥测数据仪表盘 */
+        .gauge-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            padding: 16px;
+        }
+        .gauge-item {
+            background: #0a0e1a; border-radius: 10px;
+            padding: 16px; text-align: center;
+            border: 1px solid #1e293b;
+        }
+        .gauge-value {
+            font-size: 28px; font-weight: 700;
+            margin: 8px 0;
+        }
+        .gauge-label {
+            font-size: 11px; color: #64748b;
+            text-transform: uppercase;
+        }
+        .gauge-unit {
+            font-size: 13px; color: #94a3b8;
+        }
+        .gauge-bar {
+            height: 4px; background: #1e293b;
+            border-radius: 2px; margin-top: 10px;
+            overflow: hidden;
+        }
+        .gauge-bar-fill {
+            height: 100%; border-radius: 2px;
+            transition: width 0.5s ease;
+        }
+        
+        /* 自检结果 */
+        .test-result {
+            padding: 16px;
+        }
+        .test-item {
+            display: flex; justify-content: space-between;
+            align-items: center; padding: 10px 0;
+            border-bottom: 1px solid #1e293b;
+        }
+        .test-item:last-child { border-bottom: none; }
+        .test-name { font-size: 13px; color: #cbd5e1; }
+        .test-status {
+            padding: 4px 12px; border-radius: 12px;
+            font-size: 12px; font-weight: 600;
+        }
+        .test-pass { background: rgba(34, 197, 94, 0.15); color: #4ade80; }
+        .test-fail { background: rgba(239, 68, 68, 0.15); color: #f87171; }
+        .test-pending { background: rgba(148, 163, 184, 0.15); color: #94a3b8; }
+        
+        /* GPS 面板 */
+        .gps-panel { padding: 16px; }
+        .coord-display {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+            margin-bottom: 16px;
+        }
+        .coord-box {
+            background: #0a0e1a; border-radius: 10px;
+            padding: 16px; text-align: center;
+            border: 1px solid #1e293b;
+        }
+        .coord-icon { font-size: 24px; margin-bottom: 8px; }
+        .coord-label { font-size: 11px; color: #64748b; margin-bottom: 4px; }
+        .coord-value {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 18px; color: #4ade80; font-weight: 600;
+        }
+        .gps-detail {
+            background: #0a0e1a; border-radius: 8px;
+            padding: 12px; font-size: 12px;
+            color: #94a3b8; line-height: 1.8;
+        }
+        
+        /* 配对信息 */
+        .pairing-info { padding: 16px; }
+        .info-row {
+            display: flex; justify-content: space-between;
+            padding: 10px 0; border-bottom: 1px solid #1e293b;
+        }
+        .info-row:last-child { border-bottom: none; }
+        .info-label { font-size: 12px; color: #64748b; }
+        .info-value {
+            font-size: 13px; color: #e2e8f0;
+            font-family: monospace;
+        }
+        
+        /* ACK 确认 */
+        .ack-panel { padding: 16px; }
+        .ack-item {
+            background: #0a0e1a; border-radius: 8px;
+            padding: 12px; margin-bottom: 10px;
+            border-left: 3px solid #3b82f6;
+        }
+        .ack-topic { font-size: 11px; color: #60a5fa; margin-bottom: 4px; }
+        .ack-result { font-size: 13px; color: #e2e8f0; }
+        .ack-time { font-size: 11px; color: #64748b; margin-top: 4px; }
+        
+        /* 下行命令 */
+        .command-row {
+            padding: 16px; border-bottom: 1px solid #1e293b;
+        }
+        .command-row:last-child { border-bottom: none; }
+        .command-label {
+            font-size: 12px; color: #94a3b8; margin-bottom: 8px;
+            font-family: monospace;
+        }
+        .command-desc {
+            font-size: 13px; color: #cbd5e1; margin-bottom: 10px;
+        }
+        .command-input {
+            width: 100%;
+            padding: 10px 14px; background: #0a0e1a;
+            border: 1px solid #334155; border-radius: 8px;
+            color: #e2e8f0; font-size: 13px;
+            font-family: monospace; margin-bottom: 10px;
+        }
+        .command-input:focus { outline: none; border-color: #3b82f6; }
+        .command-result {
+            margin-top: 10px;
+            padding: 10px 14px; background: #0a0e1a;
+            border: 1px solid #1e293b; border-radius: 8px;
+            color: #4ade80; font-size: 12px;
+            font-family: monospace; display: none;
+        }
+        .command-result.show { display: block; }
+        .command-result.error { color: #f87171; border-color: #ef4444; }
+        
+        /* 统计栏 */
+        .stats-bar {
+            display: grid; grid-template-columns: repeat(5, 1fr); gap: 15px;
+            margin-bottom: 20px;
+        }
+        .stat-card {
+            background: #111827; border-radius: 12px; padding: 16px;
+            border: 1px solid #1e293b; text-align: center;
+        }
+        .stat-value { font-size: 24px; font-weight: 700; color: #3b82f6; }
+        .stat-label { font-size: 11px; color: #64748b; margin-top: 4px; }
+        
+        /* 日志 */
+        .log-panel { margin-top: 20px; }
+        .log-container {
+            max-height: 200px; overflow-y: auto; padding: 10px;
+        }
+        .log-entry {
+            padding: 6px 12px; border-bottom: 1px solid #1e293b;
+            font-size: 12px; font-family: monospace;
+        }
+        .log-time { color: #475569; margin-right: 8px; }
+        .log-topic { color: #3b82f6; margin-right: 8px; }
+        .log-payload { color: #94a3b8; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>PowerBank MQTT 监控中心</h1>
+        <div class="status-badge status-disconnected" id="statusBadge">
+            <span class="status-dot"></span>
+            <span id="statusText">未连接</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 连接配置 -->
+        <div class="config-panel">
+            <div class="config-grid">
+                <div class="input-group">
+                    <label>WebSocket URL</label>
+                    <input type="text" id="wsUrl" value="wss://c21ee151.ala.dedicated.aliyun.emqxcloud.cn:8084/mqtt">
+                </div>
+                <div class="input-group">
+                    <label>Client ID</label>
+                    <input type="text" id="clientId" value="web_monitor_001">
+                </div>
+                <div class="input-group">
+                    <label>用户名</label>
+                    <input type="text" id="username" placeholder="EMQX Cloud 用户名">
+                </div>
+                <div class="input-group">
+                    <label>密码</label>
+                    <input type="password" id="password" placeholder="EMQX Cloud 密码">
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button class="btn btn-primary" id="connectBtn" onclick="connect()">🔗 连接</button>
+                <button class="btn btn-danger" onclick="disconnect()">❌ 断开</button>
+            </div>
+        </div>
+
+        <!-- 统计 -->
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-value" id="statStatus">--</div>
+                <div class="stat-label">设备状态</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statTelemetry">0</div>
+                <div class="stat-label">遥测数据</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statGPS">0</div>
+                <div class="stat-label">GPS 定位</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statACK">0</div>
+                <div class="stat-label">命令确认</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statCommands">0</div>
+                <div class="stat-label">命令下发</div>
+            </div>
+        </div>
+
+        <!-- 主内容区 -->
+        <div class="main-layout">
+            <!-- 第1列：设备状态 + 自检 -->
+            <div>
+                <!-- 设备在线状态 -->
+                <div class="panel" style="margin-bottom: 20px;">
+                    <div class="panel-header">📶 设备状态 /powerbank/status</div>
+                    <div class="status-indicator">
+                        <div class="status-big" id="statusIcon">⏸️</div>
+                        <div class="status-text status-unknown" id="statusTextBig">未连接</div>
+                        <div class="last-will-info" id="lastWillInfo">
+                            等待设备上线...
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 自检结果 -->
+                <div class="panel" style="margin-bottom: 20px;">
+                    <div class="panel-header">🔍 自检结果 /powerbank/self_test</div>
+                    <div class="test-result" id="selfTestPanel">
+                        <div class="test-item">
+                            <span class="test-name">BMS 通信</span>
+                            <span class="test-status test-pending">等待</span>
+                        </div>
+                        <div class="test-item">
+                            <span class="test-name">逆变器通信</span>
+                            <span class="test-status test-pending">等待</span>
+                        </div>
+                        <div class="test-item">
+                            <span class="test-name">温度传感器</span>
+                            <span class="test-status test-pending">等待</span>
+                        </div>
+                        <div class="test-item">
+                            <span class="test-name">电压检测</span>
+                            <span class="test-status test-pending">等待</span>
+                        </div>
+                        <div class="test-item">
+                            <span class="test-name">SIM 卡状态</span>
+                            <span class="test-status test-pending">等待</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 命令确认 -->
+                <div class="panel">
+                    <div class="panel-header">✅ 命令确认 /powerbank/ack</div>
+                    <div class="ack-panel" id="ackPanel">
+                        <div style="color: #64748b; text-align: center; padding: 20px;">等待命令响应...</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 第2列：遥测数据 + GPS -->
+            <div>
+                <!-- 遥测数据仪表盘 -->
+                <div class="panel" style="margin-bottom: 20px;">
+                    <div class="panel-header">📊 遥测数据 /powerbank/telemetry/data</div>
+                    <div class="gauge-grid" id="telemetryPanel">
+                        <div class="gauge-item">
+                            <div class="gauge-label">开关状态</div>
+                            <div class="gauge-value" style="color: #94a3b8;">--</div>
+                            <div class="gauge-unit" id="powerStatus">等待数据</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">充电状态</div>
+                            <div class="gauge-value" style="color: #94a3b8;">--</div>
+                            <div class="gauge-unit" id="chargeStatus">等待数据</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">输出功率</div>
+                            <div class="gauge-value" style="color: #f59e0b;">--</div>
+                            <div class="gauge-unit">W</div>
+                            <div class="gauge-bar"><div class="gauge-bar-fill" style="width: 0%; background: #f59e0b;"></div></div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">输出电压</div>
+                            <div class="gauge-value" style="color: #3b82f6;">--</div>
+                            <div class="gauge-unit">V</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">输出电流</div>
+                            <div class="gauge-value" style="color: #22c55e;">--</div>
+                            <div class="gauge-unit">A</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">电池 SOC</div>
+                            <div class="gauge-value" style="color: #8b5cf6;">--</div>
+                            <div class="gauge-unit">%</div>
+                            <div class="gauge-bar"><div class="gauge-bar-fill" style="width: 0%; background: #8b5cf6;"></div></div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">电池电压</div>
+                            <div class="gauge-value" style="color: #ec4899;">--</div>
+                            <div class="gauge-unit">V</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">电池温度</div>
+                            <div class="gauge-value" style="color: #f97316;">--</div>
+                            <div class="gauge-unit">°C</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">输入功率</div>
+                            <div class="gauge-value" style="color: #06b6d4;">--</div>
+                            <div class="gauge-unit">W</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">输入电压</div>
+                            <div class="gauge-value" style="color: #14b8a6;">--</div>
+                            <div class="gauge-unit">V</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">网络信号</div>
+                            <div class="gauge-value" style="color: #a855f7;">--</div>
+                            <div class="gauge-unit">dBm</div>
+                        </div>
+                        <div class="gauge-item">
+                            <div class="gauge-label">剩余容量</div>
+                            <div class="gauge-value" style="color: #eab308;">--</div>
+                            <div class="gauge-unit">Ah</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- GPS 定位 -->
+                <div class="panel">
+                    <div class="panel-header">📍 GPS 定位 /powerbank/telemetry/gps</div>
+                    <div class="gps-panel" id="gpsPanel">
+                        <div class="coord-display">
+                            <div class="coord-box">
+                                <div class="coord-icon">🌐</div>
+                                <div class="coord-label">纬度 Latitude</div>
+                                <div class="coord-value" id="gpsLat">--</div>
+                            </div>
+                            <div class="coord-box">
+                                <div class="coord-icon">🌐</div>
+                                <div class="coord-label">经度 Longitude</div>
+                                <div class="coord-value" id="gpsLng">--</div>
+                            </div>
+                        </div>
+                        <div class="gps-detail" id="gpsDetail">
+                            设备: --<br>
+                            IMEI: --<br>
+                            网络时间: --<br>
+                            上报时间: --
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 第3列：配对 + 命令 -->
+            <div>
+                <!-- 配对发现 -->
+                <div class="panel" style="margin-bottom: 20px;">
+                    <div class="panel-header">🔌 配对发现 /pairing/discover</div>
+                    <div class="pairing-info" id="pairingPanel">
+                        <div class="info-row">
+                            <span class="info-label">设备序列号</span>
+                            <span class="info-value" id="pairSN">--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">BMS 序列号</span>
+                            <span class="info-value" id="pairBMS">--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">逆变器序列号</span>
+                            <span class="info-value" id="pairInverter">--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">SIM ID</span>
+                            <span class="info-value" id="pairSIM">--</span>
+                        </div>
+                        <div class="info-row">
+                            <span class="info-label">运营商</span>
+                            <span class="info-value" id="pairOperator">--</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- 下行命令 -->
+                <div class="panel">
+                    <div class="panel-header">🎮 下行命令控制</div>
+                    
+                    <div class="command-row">
+                        <div class="command-label">/powerbank/command/shutdown</div>
+                        <div class="command-desc">远程关机命令</div>
+                        <input type="text" class="command-input" id="shutdownInput" 
+                               placeholder='{"shutdown": true, "correlation_id": "uuid"}'>
+                        <button class="btn btn-warning" onclick="sendCommand('shutdown')">
+                            ⏻ 发送关机命令
+                        </button>
+                        <div class="command-result" id="shutdownResult"></div>
+                    </div>
+                    
+                    <div class="command-row">
+                        <div class="command-label">/pairing/configure</div>
+                        <div class="command-desc">配对配置（下发 client_id 等）</div>
+                        <input type="text" class="command-input" id="configureInput" 
+                               placeholder='{"client_id": "xxx", "inverter_serial": "xxx"}'>
+                        <button class="btn btn-success" onclick="sendCommand('configure')">
+                            ⚙️ 发送配对配置
+                        </button>
+                        <div class="command-result" id="configureResult"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 日志面板 -->
+        <div class="panel log-panel">
+            <div class="panel-header">📝 实时日志</div>
+            <div class="log-container" id="logContainer">
+                <div class="log-entry" style="color: #475569;">等待连接...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let client = null;
+        let commandCount = 0;
+        let telemetryCount = 0;
+        let gpsCount = 0;
+        let ackCount = 0;
+
+        function connect() {
+            const url = document.getElementById('wsUrl').value.trim();
+            const clientId = document.getElementById('clientId').value.trim();
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+
+            if (!url || !clientId || !username) {
+                log('系统', '请填写完整的连接信息');
+                return;
+            }
+
+            const options = {
+                clientId: clientId,
+                clean: true,
+                connectTimeout: 15000,
+                reconnectPeriod: 5000,
+            };
+            if (username) options.username = username;
+            if (password) options.password = password;
+
+            updateStatus('connecting', '连接中...');
+            document.getElementById('connectBtn').disabled = true;
+
+            try {
+                client = mqtt.connect(url, options);
+
+                client.on('connect', function() {
+                    updateStatus('connected', '已连接');
+                    document.getElementById('connectBtn').disabled = false;
+                    log('系统', '✅ MQTT 连接成功');
+                    
+                    const topics = [
+                        '/powerbank/status',
+                        '/powerbank/self_test',
+                        '/powerbank/ack',
+                        '/powerbank/telemetry/data',
+                        '/powerbank/telemetry/gps',
+                        '/pairing/discover'
+                    ];
+                    
+                    topics.forEach(function(topic) {
+                        client.subscribe(topic, function(err) {
+                            if (!err) log('订阅', '✅ ' + topic);
+                        });
+                    });
+                });
+
+                client.on('message', function(topic, payload) {
+                    handleMessage(topic, payload);
+                });
+
+                client.on('error', function(err) {
+                    updateStatus('error', '错误');
+                    document.getElementById('connectBtn').disabled = false;
+                    log('错误', err.message);
+                });
+
+                client.on('close', function() {
+                    updateStatus('disconnected', '已断开');
+                    document.getElementById('connectBtn').disabled = false;
+                    // 设备离线
+                    updateDeviceStatus(false);
+                });
+
+            } catch (err) {
+                document.getElementById('connectBtn').disabled = false;
+                log('错误', '连接失败: ' + err.message);
+            }
+        }
+
+        function disconnect() {
+            if (client) {
+                client.end();
+                client = null;
+            }
+            updateStatus('disconnected', '已断开');
+            updateDeviceStatus(false);
+            log('系统', '已断开连接');
+        }
+
+        function handleMessage(topic, payload) {
+            const data = payload.toString();
+            let jsonData = null;
+            
+            try {
+                jsonData = JSON.parse(data);
+            } catch (e) {
+                jsonData = null;
+            }
+
+            log('接收', topic);
+
+            switch (topic) {
+                case '/powerbank/status':
+                    if (jsonData) {
+                        updateDeviceStatus(jsonData.status === 'online' || jsonData.online === true);
+                        updateLastWill(jsonData);
+                    }
+                    break;
+                    
+                case '/powerbank/self_test':
+                    if (jsonData) {
+                        updateSelfTest(jsonData);
+                    }
+                    break;
+                    
+                case '/powerbank/ack':
+                    if (jsonData) {
+                        updateACK(jsonData);
+                        ackCount++;
+                        document.getElementById('statACK').textContent = ackCount;
+                    }
+                    break;
+                    
+                case '/powerbank/telemetry/data':
+                    if (jsonData) {
+                        updateTelemetry(jsonData);
+                        telemetryCount++;
+                        document.getElementById('statTelemetry').textContent = telemetryCount;
+                    }
+                    break;
+                    
+                case '/powerbank/telemetry/gps':
+                    if (jsonData) {
+                        updateGPS(jsonData);
+                        gpsCount++;
+                        document.getElementById('statGPS').textContent = gpsCount;
+                    }
+                    break;
+                    
+                case '/pairing/discover':
+                    if (jsonData) {
+                        updatePairing(jsonData);
+                    }
+                    break;
+            }
+        }
+
+        // 更新设备状态
+        function updateDeviceStatus(online) {
+            const icon = document.getElementById('statusIcon');
+            const text = document.getElementById('statusTextBig');
+            const stat = document.getElementById('statStatus');
+            
+            if (online) {
+                icon.textContent = '🟢';
+                text.textContent = '在线';
+                text.className = 'status-text status-online';
+                stat.textContent = '在线';
+                stat.style.color = '#4ade80';
+            } else {
+                icon.textContent = '🔴';
+                text.textContent = '离线';
+                text.className = 'status-text status-offline';
+                stat.textContent = '离线';
+                stat.style.color = '#f87171';
+            }
+        }
+
+        // 更新遗愿信息
+        function updateLastWill(data) {
+            const info = document.getElementById('lastWillInfo');
+            const time = new Date().toLocaleString('zh-CN');
+            info.innerHTML = `
+                <div>最后心跳: ${data.last_seen || time}</div>
+                <div>连接时长: ${data.uptime || '--'}</div>
+                <div>信号强度: ${data.rssi || '--'} dBm</div>
+            `;
+        }
+
+        // 更新自检结果
+        function updateSelfTest(data) {
+            const panel = document.getElementById('selfTestPanel');
+            const tests = [
+                { key: 'bms', name: 'BMS 通信' },
+                { key: 'inverter', name: '逆变器通信' },
+                { key: 'temperature', name: '温度传感器' },
+                { key: 'voltage', name: '电压检测' },
+                { key: 'sim', name: 'SIM 卡状态' }
+            ];
+            
+            let html = '';
+            tests.forEach(function(test) {
+                const result = data[test.key];
+                let statusClass = 'test-pending';
+                let statusText = '等待';
+                
+                if (result === true || result === 'pass') {
+                    statusClass = 'test-pass';
+                    statusText = '通过';
+                } else if (result === false || result === 'fail') {
+                    statusClass = 'test-fail';
+                    statusText = '失败';
+                }
+                
+                html += `
+                    <div class="test-item">
+                        <span class="test-name">${test.name}</span>
+                        <span class="test-status ${statusClass}">${statusText}</span>
+                    </div>
+                `;
+            });
+            
+            panel.innerHTML = html;
+        }
+
+        // 更新遥测数据
+        function updateTelemetry(data) {
+            const fields = [
+                { key: 'inv_powerbank_on_off_status', label: '开关状态', unit: '', color: '#94a3b8', id: 'powerStatus' },
+                { key: 'inv_charging_status_ac', label: '充电状态', unit: '', color: '#94a3b8', id: 'chargeStatus' },
+                { key: 'inv_ac_output_power', label: '输出功率', unit: 'W', color: '#f59e0b', max: 3000 },
+                { key: 'inv_ac_output_voltage', label: '输出电压', unit: 'V', color: '#3b82f6' },
+                { key: 'inv_ac_output_current', label: '输出电流', unit: 'A', color: '#22c55e' },
+                { key: 'bms_soc', label: '电池 SOC', unit: '%', color: '#8b5cf6', max: 100 },
+                { key: 'inv_battery_voltage', label: '电池电压', unit: 'V', color: '#ec4899' },
+                { key: 'inv_temperature', label: '电池温度', unit: '°C', color: '#f97316' },
+                { key: 'inv_ac_charging_power', label: '输入功率', unit: 'W', color: '#06b6d4' },
+                { key: 'inv_ac_input_voltage', label: '输入电压', unit: 'V', color: '#14b8a6' },
+                { key: 'network_strength', label: '网络信号', unit: 'dBm', color: '#a855f7' },
+                { key: 'bms_remaining_capacity', label: '剩余容量', unit: 'Ah', color: '#eab308' }
+            ];
+            
+            const panel = document.getElementById('telemetryPanel');
+            let html = '';
+            
+            fields.forEach(function(field, index) {
+                const value = data[field.key];
+                const displayValue = value !== undefined ? value : '--';
+                const displayText = field.id ? 
+                    (value !== undefined ? (value === true ? '开启' : value === false ? '关闭' : value) : '等待数据') 
+                    : '';
+                
+                let barHtml = '';
+                if (field.max && value !== undefined) {
+                    const percent = Math.min((value / field.max) * 100, 100);
+                    barHtml = `<div class="gauge-bar"><div class="gauge-bar-fill" style="width: ${percent}%; background: ${field.color};"></div></div>`;
+                }
+                
+                html += `
+                    <div class="gauge-item">
+                        <div class="gauge-label">${field.label}</div>
+                        <div class="gauge-value" style="color: ${field.color};">${displayValue}</div>
+                        <div class="gauge-unit">${field.id ? displayText : field.unit}</div>
+                        ${barHtml}
+                    </div>
+                `;
+            });
+            
+            panel.innerHTML = html;
+        }
+
+        // 更新 GPS
+        function updateGPS(data) {
+            const lat = data.latitude || data.lat;
+            const lng = data.longitude || data.lng || data.lon;
+            
+            if (lat !== undefined) {
+                document.getElementById('gpsLat').textContent = typeof lat === 'number' ? lat.toFixed(7) : lat;
+            }
+            if (lng !== undefined) {
+                document.getElementById('gpsLng').textContent = typeof lng === 'number' ? lng.toFixed(7) : lng;
+            }
+            
+            document.getElementById('gpsDetail').innerHTML = `
+                设备: ${data.device || data.client_id || '--'}<br>
+                IMEI: ${data.imei || '--'}<br>
+                网络时间: ${data.nettime || '--'}<br>
+                上报时间: ${data.timestamp ? new Date(data.timestamp).toLocaleString('zh-CN') : new Date().toLocaleString('zh-CN')}
+            `;
+        }
+
+        // 更新配对信息
+        function updatePairing(data) {
+            document.getElementById('pairSN').textContent = data.device_sn || data.sn || '--';
+            document.getElementById('pairBMS').textContent = data.id_bms || data.bms_serial || '--';
+            document.getElementById('pairInverter').textContent = data.id_inverter || data.inverter_serial || '--';
+            document.getElementById('pairSIM').textContent = data.sim_id || '--';
+            document.getElementById('pairOperator').textContent = data.sim_operator || '--';
+        }
+
+        // 更新 ACK
+        function updateACK(data) {
+            const panel = document.getElementById('ackPanel');
+            const time = new Date().toLocaleTimeString('zh-CN');
+            
+            const item = document.createElement('div');
+            item.className = 'ack-item';
+            item.innerHTML = `
+                <div class="ack-topic">${data.correlation_id || '未知命令'}</div>
+                <div class="ack-result">${data.success ? '✅ 执行成功' : '❌ 执行失败'} ${data.error || ''}</div>
+                <div class="ack-time">${time}</div>
+            `;
+            
+            panel.insertBefore(item, panel.firstChild);
+            
+            // 保持最多 10 条
+            while (panel.children.length > 10) {
+                panel.removeChild(panel.lastChild);
+            }
+        }
+
+        // 发送命令
+        function sendCommand(type) {
+            if (!client || !client.connected) {
+                log('错误', '请先连接 MQTT');
+                return;
+            }
+
+            let topic, payload, resultId;
+            
+            if (type === 'shutdown') {
+                topic = '/powerbank/command/shutdown';
+                const input = document.getElementById('shutdownInput').value.trim();
+                try {
+                    payload = input ? JSON.parse(input) : {
+                        shutdown: true,
+                        correlation_id: generateUUID(),
+                        timestamp: Date.now()
+                    };
+                } catch (e) {
+                    showResult('shutdownResult', '❌ JSON 格式错误: ' + e.message, true);
+                    return;
+                }
+                resultId = 'shutdownResult';
+                
+            } else if (type === 'configure') {
+                topic = '/pairing/configure';
+                const input = document.getElementById('configureInput').value.trim();
+                try {
+                    payload = input ? JSON.parse(input) : {
+                        client_id: 'web_monitor_' + generateUUID().slice(0, 8),
+                        inverter_serial: 'INV-' + generateUUID().slice(0, 8),
+                        timestamp: Date.now()
+                    };
+                } catch (e) {
+                    showResult('configureResult', '❌ JSON 格式错误: ' + e.message, true);
+                    return;
+                }
+                resultId = 'configureResult';
+            }
+
+            const payloadStr = JSON.stringify(payload);
+            
+            client.publish(topic, payloadStr, function(err) {
+                if (err) {
+                    showResult(resultId, '❌ 发送失败: ' + err.message, true);
+                } else {
+                    commandCount++;
+                    document.getElementById('statCommands').textContent = commandCount;
+                    showResult(resultId, '✅ 发送成功\n' + JSON.stringify(payload, null, 2));
+                    log('发送', topic);
+                }
+            });
+        }
+
+        function showResult(elementId, message, isError) {
+            const el = document.getElementById(elementId);
+            el.textContent = message;
+            el.className = 'command-result show' + (isError ? ' error' : '');
+            setTimeout(function() {
+                el.className = 'command-result';
+            }, 5000);
+        }
+
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+
+        function log(type, message) {
+            const container = document.getElementById('logContainer');
+            const time = new Date().toLocaleTimeString('zh-CN');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-topic">${type}:</span><span class="log-payload">${message}</span>`;
+            container.insertBefore(entry, container.firstChild);
+            
+            while (container.children.length > 100) {
+                container.removeChild(container.lastChild);
+            }
+        }
+
+        function updateStatus(state, text) {
+            const badge = document.getElementById('statusBadge');
+            const statusText = document.getElementById('statusText');
+            badge.className = 'status-badge';
+            if (state === 'connected') badge.classList.add('status-connected');
+            else if (state === 'connecting') badge.classList.add('status-connecting');
+            else badge.classList.add('status-disconnected');
+            statusText.textContent = text;
+        }
+    </script>
+</body>
+</html>
